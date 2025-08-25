@@ -1,0 +1,16 @@
+x# Xcode
+DerivedData/
+build/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
+
+# Swift Package Manager
+.build/
+
+# CocoaPods
+Pods/
+
+# Carthage
+Carthage/Build/
+
