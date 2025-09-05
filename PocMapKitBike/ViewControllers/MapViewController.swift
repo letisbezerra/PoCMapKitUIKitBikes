@@ -1,5 +1,5 @@
 //
-//  ViewController.swift
+//  MapViewController.swift
 //  PocMapKitBike
 //
 //  Created by Leticia Bezerra on 25/08/25.
@@ -10,20 +10,32 @@ import MapKit
 import CoreLocation
 import SwiftUI
 
-class MapViewController: UIViewController, MKMapViewDelegate {
+class MapViewController: UIViewController, MKMapViewDelegate, CLLocationManagerDelegate {
     var mapView: MKMapView!
     var locationManager = CLLocationManager()
     var currentLocation: CLLocationCoordinate2D?
 
     var start = CLLocationCoordinate2D(latitude: -3.71722, longitude: -38.5434)
     var end = CLLocationCoordinate2D(latitude: -3.72000, longitude: -38.5465)
-
-//    // Ciclovia fixa
-//    let bikePathCoordinates = [
-//        CLLocationCoordinate2D(latitude: -3.71722, longitude: -38.5434),
-//        CLLocationCoordinate2D(latitude: -3.71850, longitude: -38.5450),
-//        CLLocationCoordinate2D(latitude: -3.72000, longitude: -38.5465)
-//    ]
+    
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        switch manager.authorizationStatus {
+        case .authorizedWhenInUse:  // Location services are available.
+            manager.startUpdatingLocation()
+            break
+            
+        case .restricted, .denied:  // Location services currently unavailable.
+//            disableLocationFeatures()
+            break
+            
+        case .notDetermined:        // Authorization not determined yet.
+           manager.requestWhenInUseAuthorization()
+            break
+            
+        default:
+            break
+        }
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -39,20 +51,28 @@ class MapViewController: UIViewController, MKMapViewDelegate {
         ])
 
         mapView.delegate = self
-
-        locationManager.requestWhenInUseAuthorization()
-        locationManager.startUpdatingLocation()
-
+        locationManager.delegate = self
+        locationManagerDidChangeAuthorization(locationManager)
+//        locationManager.startUpdatingLocation()
+//
         let region = MKCoordinateRegion(center: start, latitudinalMeters: 10000, longitudinalMeters: 10000)
         mapView.setRegion(region, animated: true)
 
         // Anotação inicial
-        let annotation = CommunityAnnotation(coordinate: start, title: "Byques", subtitle: "De boas", communityInfo: "Informações detalhadas sobre a comunidade Byques.")
+        let annotation = CommunityAnnotation(
+            coordinate: start,
+            title: "Byques",
+            subtitle: "De boas",
+            communityInfo: "Informações detalhadas sobre a comunidade Byques.",
+            phone: "123456789",
+            websiteURL: URL(string: "https://example.com"),
+            instagramUsername: "byques",
+            whatsappLink: URL(string: "https://wa.me/123456789")
+        )
         mapView.addAnnotation(annotation)
 
-//        // Adicionar ciclovia fixa
-//        let bikePath = MKPolyline(coordinates: bikePathCoordinates, count: bikePathCoordinates.count)
-//        mapView.addOverlay(bikePath)
+        // Desenha as ciclofaixas do JSON
+        drawBikeLanes()
 
         // Botão calcular rota
         let button = UIButton(type: .system)
@@ -70,8 +90,49 @@ class MapViewController: UIViewController, MKMapViewDelegate {
         ])
     }
 
+    // Ciclofaixas
+    func drawBikeLanes() {
+        
+        let json = FortalezaJSON.loadQuickTypeGeoJSON(named: "fortaleza-ciclovias")
+        let feature = json!.features[1]
+        for feature in json!.features {
+            let geometry = feature.geometry
+            let coordinates = geometry.coordinates.map({
+                CLLocationCoordinate2D(
+                    latitude: $0[1],
+                    longitude: $0[0]
+                )
+            })
+            let polyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
+            polyline.title = "bikeLane"
+            mapView.addOverlay(polyline)
+        }
+//        for coordinate in coordinates {
+//            
+//            print(coordinate)
+//            let annotation = MKPointAnnotation()
+//            annotation.coordinate = CLLocationCoordinate2D(latitude: coordinate.latitude, longitude: coordinate.longitude)
+//            mapView.addAnnotation(annotation)
+//            
+//        }
+        
+        
+//        let bikePolygons = loadCoordinatesFromGeoJSON() // função do OSMGeoJson.swift
+//        for multiPolygon in bikePolygons {
+//            print(multiPolygon.count)
+//            for polygon in multiPolygon {
+//                print(polygon.count)
+//                let polyline = MKPolyline(coordinates: polygon, count: polygon.count)
+//                polyline.title = "bikeLane"
+//                mapView.addOverlay(polyline)
+//            }
+//        }
+    }
+
+    // Rotas
     @objc func calculateBikeRoute() {
         let inputVC = RouteInputViewController()
+        inputVC.setText()
         inputVC.modalPresentationStyle = .pageSheet
         inputVC.onLocationsSelected = { [weak self] newStart, newEnd in
             guard let self = self else { return }
@@ -101,79 +162,99 @@ class MapViewController: UIViewController, MKMapViewDelegate {
                 return
             }
 
-            self.mapView.removeOverlays(self.mapView.overlays)
-//
-//            let bikePath = MKPolyline(coordinates: self.bikePathCoordinates, count: self.bikePathCoordinates.count)
-//            self.mapView.addOverlay(bikePath)
-            self.mapView.addOverlay(route.polyline)
-
-            self.mapView.setVisibleMapRect(route.polyline.boundingMapRect,
-                                          edgePadding: UIEdgeInsets(top: 50, left: 50, bottom: 100, right: 50),
-                                          animated: true)
-        }
-    }
-
-    // Customiza a anotação para usar imagem e botão info
-    func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
-        guard !(annotation is MKUserLocation) else { return nil }
-
-        let identifier = "CommunityPin"
-        var annotationView = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
-        if annotationView == nil {
-            annotationView = MKAnnotationView(annotation: annotation, reuseIdentifier: identifier)
-            annotationView?.canShowCallout = true
-
-            if let originalImage = UIImage(named: "imagepin") {
-                let size = CGSize(width: 40, height: 40)
-                UIGraphicsBeginImageContextWithOptions(size, false, 0.0)
-                originalImage.draw(in: CGRect(origin: .zero, size: size))
-                let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
-                UIGraphicsEndImageContext()
-                annotationView?.image = resizedImage
+            // Remove apenas rotas antigas, mantendo ciclofaixas
+            for overlay in self.mapView.overlays {
+                if let polyline = overlay as? MKPolyline, polyline.pointCount > 3, polyline.title != "bikeLane" {
+                    self.mapView.removeOverlay(polyline)
+                }
             }
 
-            let infoButton = UIButton(type: .detailDisclosure)
-            annotationView?.rightCalloutAccessoryView = infoButton
-        } else {
-            annotationView?.annotation = annotation
+            self.mapView.addOverlay(route.polyline)
+            self.mapView.setVisibleMapRect(
+                route.polyline.boundingMapRect,
+                edgePadding: UIEdgeInsets(top: 50, left: 50, bottom: 100, right: 50),
+                animated: true
+            )
         }
+    }
+
+    // MapView Delegate
+    
+    func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+        guard annotation is MKPointAnnotation else { return nil }
+
+        let identifier = "Annotation"
+        var annotationView = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
+
+        if annotationView == nil {
+            annotationView = MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: identifier)
+            annotationView!.canShowCallout = true
+        } else {
+            annotationView!.annotation = annotation
+        }
+
         return annotationView
     }
+    
+//    func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+//        guard !(annotation is MKUserLocation) else { return nil }
+//
+//        let identifier = "CommunityPin"
+//        var annotationView = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
+//        if annotationView == nil {
+//            annotationView = MKAnnotationView(annotation: annotation, reuseIdentifier: identifier)
+//            annotationView?.canShowCallout = true
+//
+//            if let originalImage = UIImage(named: "imagepin") {
+//                let size = CGSize(width: 40, height: 40)
+//                UIGraphicsBeginImageContextWithOptions(size, false, 0.0)
+//                originalImage.draw(in: CGRect(origin: .zero, size: size))
+//                let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
+//                UIGraphicsEndImageContext()
+//                annotationView?.image = resizedImage
+//            }
+//
+//            let infoButton = UIButton(type: .detailDisclosure)
+//            annotationView?.rightCalloutAccessoryView = infoButton
+//        } else {
+//            annotationView?.annotation = annotation
+//        }
+//        return annotationView
+//    }
 
-    // Tocar no botão de info abre alerta com informações da comunidade
     func mapView(_ mapView: MKMapView, annotationView view: MKAnnotationView,
                  calloutAccessoryControlTapped control: UIControl) {
-        guard let communityAnnotation = view.annotation as? CommunityAnnotation else { return }
+        guard let annotation = view.annotation as? CommunityAnnotation else { return }
 
-        let alert = UIAlertController(title: communityAnnotation.title,
-                                      message: communityAnnotation.communityInfo,
-                                      preferredStyle: .actionSheet)
-        alert.addAction(UIAlertAction(title: "Fechar", style: .cancel))
-        present(alert, animated: true)
+        let sheetVC = CommunityInfoViewController(annotation: annotation)
+        if let sheet = sheetVC.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+        }
+        present(sheetVC, animated: true)
     }
 
-    // Renderiza overlays — rota e ciclovia com cores diferentes
     func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
         if let polyline = overlay as? MKPolyline {
             let renderer = MKPolylineRenderer(polyline: polyline)
-
-            if polyline.pointCount > 3 {
-                renderer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.8) // rota calculada
-                renderer.lineWidth = 6
+            if polyline.title == "bikeLane" {
+                renderer.strokeColor = UIColor.systemGreen
+                renderer.lineWidth = 5
             } else {
-                renderer.strokeColor = UIColor.systemGreen.withAlphaComponent(0.7) // ciclovia fixa
-                renderer.lineWidth = 4
+                renderer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.8)
+                renderer.lineWidth = 6
             }
+
             return renderer
         }
         return MKOverlayRenderer(overlay: overlay)
     }
 
-    // Atualiza localização atual e pode centralizar o mapa
+    // Location Manager Delegate
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
         currentLocation = location.coordinate
-
+        
         let region = MKCoordinateRegion(center: location.coordinate, latitudinalMeters: 10000, longitudinalMeters: 10000)
         mapView.setRegion(region, animated: true)
 
@@ -181,21 +262,26 @@ class MapViewController: UIViewController, MKMapViewDelegate {
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        print("Falha ao obter localização: \(error)")
+        print("Falha ao obter localização: \(error.localizedDescription)")
     }
 }
 
-// Preview no Xcode com SwiftUI
-struct MapViewCiboController_Previews: PreviewProvider {
-    static var previews: some View {
-        UIViewControllerPreview {
-            return MapViewController()
-        }
-        .edgesIgnoringSafeArea(.all)
-    }
+// Preview antiga que a View é SwiftUI
+//struct MapViewController_Previews: PreviewProvider {
+//    static var previews: some View {
+//        UIViewControllerPreview {
+//            MapViewController()
+//        }
+//        .edgesIgnoringSafeArea(.all)
+//    }
+//}
+
+#Preview {
+    MapViewController()
 }
 
-// Helper para mostrar UIViewController no preview SwiftUI
+
+// Transforma UIKit -> SwiftUI
 struct UIViewControllerPreview<ViewController: UIViewController>: UIViewControllerRepresentable {
 
     let viewControllerBuilder: () -> ViewController
@@ -208,7 +294,5 @@ struct UIViewControllerPreview<ViewController: UIViewController>: UIViewControll
         return viewControllerBuilder()
     }
 
-    func updateUIViewController(_ uiViewController: ViewController, context: Context) {
-        // Sem atualização necessária
-    }
+    func updateUIViewController(_ uiViewController: ViewController, context: Context) {}
 }
