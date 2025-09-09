@@ -18,8 +18,8 @@ class RouteInputViewController: UIViewController {
     private let confirmButton = UIButton(type: .system)
     
     func setText() {
-        startTextField.text = "Rua Papi Junior 414"
-        endTextField.text = "Av. Beira Mar, 347"
+        startTextField.text = "Rua Papi Junior, 414"
+        endTextField.text = "Av. Washington Soares, 85"
     }
 
     override func viewDidLoad() {

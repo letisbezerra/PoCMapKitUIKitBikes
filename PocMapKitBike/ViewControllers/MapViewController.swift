@@ -10,6 +10,10 @@ import MapKit
 import CoreLocation
 import SwiftUI
 
+struct BikeLane {
+    let coordinates: [CLLocationCoordinate2D]
+}
+
 class MapViewController: UIViewController, MKMapViewDelegate, CLLocationManagerDelegate {
     var mapView: MKMapView!
     var locationManager = CLLocationManager()
@@ -17,6 +21,10 @@ class MapViewController: UIViewController, MKMapViewDelegate, CLLocationManagerD
 
     var start = CLLocationCoordinate2D(latitude: -3.71722, longitude: -38.5434)
     var end = CLLocationCoordinate2D(latitude: -3.72000, longitude: -38.5465)
+    
+//    var allBikeLanes: [MKPolyline] = []
+    
+    var allBikeLanes: [BikeLane] = []
     
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         switch manager.authorizationStatus {
@@ -92,41 +100,24 @@ class MapViewController: UIViewController, MKMapViewDelegate, CLLocationManagerD
 
     // Ciclofaixas
     func drawBikeLanes() {
-        
-        let json = FortalezaJSON.loadQuickTypeGeoJSON(named: "fortaleza-ciclovias")
-        let feature = json!.features[1]
-        for feature in json!.features {
-            let geometry = feature.geometry
-            let coordinates = geometry.coordinates.map({
-                CLLocationCoordinate2D(
-                    latitude: $0[1],
-                    longitude: $0[0]
-                )
-            })
-            let polyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
-            polyline.title = "bikeLane"
-            mapView.addOverlay(polyline)
+        guard let json = FortalezaJSON.loadQuickTypeGeoJSON(named: "fortaleza-ciclovias") else {
+            print("Erro: não foi possível carregar o JSON de ciclofaixas")
+            return
         }
-//        for coordinate in coordinates {
-//            
-//            print(coordinate)
-//            let annotation = MKPointAnnotation()
-//            annotation.coordinate = CLLocationCoordinate2D(latitude: coordinate.latitude, longitude: coordinate.longitude)
-//            mapView.addAnnotation(annotation)
-//            
-//        }
-        
-        
-//        let bikePolygons = loadCoordinatesFromGeoJSON() // função do OSMGeoJson.swift
-//        for multiPolygon in bikePolygons {
-//            print(multiPolygon.count)
-//            for polygon in multiPolygon {
-//                print(polygon.count)
-//                let polyline = MKPolyline(coordinates: polygon, count: polygon.count)
-//                polyline.title = "bikeLane"
-//                mapView.addOverlay(polyline)
-//            }
-//        }
+
+        allBikeLanes.removeAll()
+
+        for feature in json.features {
+            let coordinates = feature.geometry.coordinates.map {
+                CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0])
+            }
+
+            guard !coordinates.isEmpty else { continue }
+
+//            let polyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
+//            polyline.title = "bikeLane"
+            allBikeLanes.append(BikeLane(coordinates: coordinates))
+        }
     }
 
     // Rotas
@@ -153,29 +144,86 @@ class MapViewController: UIViewController, MKMapViewDelegate, CLLocationManagerD
         let directions = MKDirections(request: request)
         directions.calculate { [weak self] response, error in
             guard let self = self else { return }
+            
             if let error = error {
                 print("Erro ao calcular rota: \(error)")
                 return
             }
+            
             guard let route = response?.routes.first else {
                 print("Nenhuma rota encontrada")
                 return
             }
 
-            // Remove apenas rotas antigas, mantendo ciclofaixas
+            // Converte a rota em array de coordenadas
+            let routeCoords: [CLLocationCoordinate2D] = (0..<route.polyline.pointCount).map {
+                route.polyline.points()[$0].coordinate
+            }
+
+            // Remove overlays antigos de ciclofaixas
             for overlay in self.mapView.overlays {
-                if let polyline = overlay as? MKPolyline, polyline.pointCount > 3, polyline.title != "bikeLane" {
+                if let polyline = overlay as? MKPolyline, polyline.title == "bikeLane" {
                     self.mapView.removeOverlay(polyline)
                 }
             }
 
+            // Adiciona a rota do MapKit
             self.mapView.addOverlay(route.polyline)
             self.mapView.setVisibleMapRect(
                 route.polyline.boundingMapRect,
                 edgePadding: UIEdgeInsets(top: 50, left: 50, bottom: 100, right: 50),
                 animated: true
             )
+            
+            // Filtra e adiciona apenas ciclofaixas próximas da rota
+            for bikeLane in self.allBikeLanes {
+                let bikeCoords = bikeLane.coordinates
+                
+                let distance = self.minDistanceBetween(routeCoords: routeCoords, bikeCoords: bikeCoords)
+                if distance <= 120 { // 20 metros do percurso
+                    let coordinates = bikeLane.coordinates.filter { coordinate in
+                        let isCloseToRoute = routeCoords.contains { routeCoordinate in
+                            self.distanceInMeters(a: coordinate, b: routeCoordinate) <= 100
+                        }
+                        return isCloseToRoute
+                    }
+//                    var coordinates: [CLLocationCoordinate2D] = []
+//                    print(bikeLane.coordinates.count)
+//                    if bikeLane.coordinates.count == 19 {
+//                        coordinates = Array(bikeLane.coordinates[15...])
+//                    } else {
+//                        coordinates = bikeLane.coordinates
+//                    }
+                    let polyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
+                    polyline.title = "bikeLane"
+                    self.mapView.addOverlay(polyline)
+                }
+            }
         }
+    }
+    
+    func distanceInMeters(a: CLLocationCoordinate2D, b: CLLocationCoordinate2D) -> CLLocationDistance {
+        let locA = CLLocation(latitude: a.latitude, longitude: a.longitude)
+        let locB = CLLocation(latitude: b.latitude, longitude: b.longitude)
+        return locA.distance(from: locB)
+    }
+    
+    // Função auxiliar: calcula distância mínima de uma polyline até outra
+    func minDistanceBetween(routeCoords: [CLLocationCoordinate2D], bikeCoords: [CLLocationCoordinate2D], step: Int = 3) -> CLLocationDistance {
+        var minDistance = CLLocationDistance.greatestFiniteMagnitude
+        
+        for bikeCoord in bikeCoords {
+            let bikeLoc = CLLocation(latitude: bikeCoord.latitude, longitude: bikeCoord.longitude)
+            for j in stride(from: 0, to: routeCoords.count, by: step) {
+                let routeLoc = CLLocation(latitude: routeCoords[j].latitude, longitude: routeCoords[j].longitude)
+                let distance = bikeLoc.distance(from: routeLoc)
+                if distance < minDistance {
+                    minDistance = distance
+                }
+            }
+        }
+        
+        return minDistance
     }
 
     // MapView Delegate
