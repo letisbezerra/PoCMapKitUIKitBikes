@@ -10,6 +10,10 @@ import MapKit
 import CoreLocation
 import SwiftUI
 
+struct BikeLane {
+    let coordinates: [CLLocationCoordinate2D]
+}
+
 class MapViewController: UIViewController, MKMapViewDelegate, CLLocationManagerDelegate {
     var mapView: MKMapView!
     var locationManager = CLLocationManager()
@@ -18,7 +22,9 @@ class MapViewController: UIViewController, MKMapViewDelegate, CLLocationManagerD
     var start = CLLocationCoordinate2D(latitude: -3.71722, longitude: -38.5434)
     var end = CLLocationCoordinate2D(latitude: -3.72000, longitude: -38.5465)
     
-    var allBikeLanes: [MKPolyline] = []
+//    var allBikeLanes: [MKPolyline] = []
+    
+    var allBikeLanes: [BikeLane] = []
     
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         switch manager.authorizationStatus {
@@ -108,9 +114,9 @@ class MapViewController: UIViewController, MKMapViewDelegate, CLLocationManagerD
 
             guard !coordinates.isEmpty else { continue }
 
-            let polyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
-            polyline.title = "bikeLane"
-            allBikeLanes.append(polyline)
+//            let polyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
+//            polyline.title = "bikeLane"
+            allBikeLanes.append(BikeLane(coordinates: coordinates))
         }
     }
 
@@ -143,13 +149,18 @@ class MapViewController: UIViewController, MKMapViewDelegate, CLLocationManagerD
                 print("Erro ao calcular rota: \(error)")
                 return
             }
+            
             guard let route = response?.routes.first else {
                 print("Nenhuma rota encontrada")
                 return
             }
 
-            // Remove apenas rotas antigas, mantendo ciclofaixas
-            /// Remove overlays antigos que não são rotas
+            // Converte a rota em array de coordenadas
+            let routeCoords: [CLLocationCoordinate2D] = (0..<route.polyline.pointCount).map {
+                route.polyline.points()[$0].coordinate
+            }
+
+            // Remove overlays antigos de ciclofaixas
             for overlay in self.mapView.overlays {
                 if let polyline = overlay as? MKPolyline, polyline.title == "bikeLane" {
                     self.mapView.removeOverlay(polyline)
@@ -164,38 +175,54 @@ class MapViewController: UIViewController, MKMapViewDelegate, CLLocationManagerD
                 animated: true
             )
             
-            // Filtra e adiciona apenas as ciclofaixas próximas da rota
-            for bikePolyline in self.allBikeLanes {
-                let distance = self.minDistanceBetween(route.polyline, bikePolyline)
-                if distance <= 20 { // 20 metros da rota
-                    self.mapView.addOverlay(bikePolyline)
+            // Filtra e adiciona apenas ciclofaixas próximas da rota
+            for bikeLane in self.allBikeLanes {
+                let bikeCoords = bikeLane.coordinates
+                
+                let distance = self.minDistanceBetween(routeCoords: routeCoords, bikeCoords: bikeCoords)
+                if distance <= 120 { // 20 metros do percurso
+                    let coordinates = bikeLane.coordinates.filter { coordinate in
+                        let isCloseToRoute = routeCoords.contains { routeCoordinate in
+                            self.distanceInMeters(a: coordinate, b: routeCoordinate) <= 100
+                        }
+                        return isCloseToRoute
+                    }
+//                    var coordinates: [CLLocationCoordinate2D] = []
+//                    print(bikeLane.coordinates.count)
+//                    if bikeLane.coordinates.count == 19 {
+//                        coordinates = Array(bikeLane.coordinates[15...])
+//                    } else {
+//                        coordinates = bikeLane.coordinates
+//                    }
+                    let polyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
+                    polyline.title = "bikeLane"
+                    self.mapView.addOverlay(polyline)
                 }
             }
         }
     }
     
+    func distanceInMeters(a: CLLocationCoordinate2D, b: CLLocationCoordinate2D) -> CLLocationDistance {
+        let locA = CLLocation(latitude: a.latitude, longitude: a.longitude)
+        let locB = CLLocation(latitude: b.latitude, longitude: b.longitude)
+        return locA.distance(from: locB)
+    }
+    
     // Função auxiliar: calcula distância mínima de uma polyline até outra
-    func minDistanceBetween(_ polyline1: MKPolyline, _ polyline2: MKPolyline) -> CLLocationDistance {
+    func minDistanceBetween(routeCoords: [CLLocationCoordinate2D], bikeCoords: [CLLocationCoordinate2D], step: Int = 3) -> CLLocationDistance {
         var minDistance = CLLocationDistance.greatestFiniteMagnitude
-
-        let coords1 = (0..<polyline1.pointCount).map {
-            polyline1.points()[$0].coordinate
-        }
-        let coords2 = (0..<polyline2.pointCount).map {
-            polyline2.points()[$0].coordinate
-        }
-
-        for c1 in coords1 {
-            let loc1 = CLLocation(latitude: c1.latitude, longitude: c1.longitude)
-            for c2 in coords2 {
-                let loc2 = CLLocation(latitude: c2.latitude, longitude: c2.longitude)
-                let dist = loc1.distance(from: loc2)
-                if dist < minDistance {
-                    minDistance = dist
+        
+        for bikeCoord in bikeCoords {
+            let bikeLoc = CLLocation(latitude: bikeCoord.latitude, longitude: bikeCoord.longitude)
+            for j in stride(from: 0, to: routeCoords.count, by: step) {
+                let routeLoc = CLLocation(latitude: routeCoords[j].latitude, longitude: routeCoords[j].longitude)
+                let distance = bikeLoc.distance(from: routeLoc)
+                if distance < minDistance {
+                    minDistance = distance
                 }
             }
         }
-
+        
         return minDistance
     }
 
